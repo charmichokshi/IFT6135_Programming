@@ -76,26 +76,29 @@ class BassetDataset(Dataset):
         output = {'sequence': None, 'target': None}
 
         # WRITE CODE HERE
-
+        output['sequence'] = torch.from_numpy(np.transpose(self.inputs[idx], (1,2,0))).to(torch.float32)
+        output['target'] = torch.from_numpy(self.outputs[idx]).to(torch.float32)
         return output
 
     def __len__(self):
         # WRITE CODE HERE
-        return 0
+        return len(self.inputs)
 
     def get_seq_len(self):
         """
         Answer to Q1 part 2
         """
         # WRITE CODE HERE
-        return 0
+        return len(self.inputs[0,0,0])
 
     def is_equivalent(self):
         """
         Answer to Q1 part 3
         """
         # WRITE CODE HERE
-        return 0
+        if self.inputs.shape == (self.__len__(),4,1,self.get_seq_len()):
+          return True
+        return False
 
 
 class Basset(nn.Module):
@@ -108,27 +111,28 @@ class Basset(nn.Module):
     def __init__(self):
         super(Basset, self).__init__()
 
-        self.dropout = ?  # should be float
+        self.dropout = 0.3  # should be float
+        self.drplayer = nn.Dropout(self.dropout)
         self.num_cell_types = 164
 
-        self.conv1 = nn.Conv2d(1, 300, (19, ?), stride=(1, 1), padding=(9, 0))
-        self.conv2 = nn.Conv2d(300, ?, (?, 1), stride=(1, 1), padding=(?, 0))
-        self.conv3 = nn.Conv2d(?, 200, (?, 1), stride=(1, 1), padding=(4, 0))
+        self.conv1 = nn.Conv2d(1, 300, (19, 4), stride=(1, 1), padding=(9, 0))
+        self.conv2 = nn.Conv2d(300, 200, (11, 1), stride=(1, 1), padding=(5, 0)) #recalculate padding
+        self.conv3 = nn.Conv2d(200, 200, (7, 1), stride=(1, 1), padding=(4, 0))
 
         self.bn1 = nn.BatchNorm2d(300)
-        self.bn2 = nn.BatchNorm2d(?)
+        self.bn2 = nn.BatchNorm2d(200)
         self.bn3 = nn.BatchNorm2d(200)
         self.maxpool1 = nn.MaxPool2d((3, 1))
-        self.maxpool2 = nn.MaxPool2d((?, 1))
-        self.maxpool3 = nn.MaxPool2d((?, 1))
+        self.maxpool2 = nn.MaxPool2d((4, 1))
+        self.maxpool3 = nn.MaxPool2d((4, 1))
 
-        self.fc1 = nn.Linear(13*200, ?)
-        self.bn4 = nn.BatchNorm1d(?)
+        self.fc1 = nn.Linear(13*200, 1000)
+        self.bn4 = nn.BatchNorm1d(1000)
 
-        self.fc2 = nn.Linear(1000, ?)
-        self.bn5 = nn.BatchNorm1d(?)
+        self.fc2 = nn.Linear(1000, 1000)
+        self.bn5 = nn.BatchNorm1d(1000)
 
-        self.fc3 = nn.Linear(?, self.num_cell_types)
+        self.fc3 = nn.Linear(1000, self.num_cell_types)
 
     def forward(self, x):
         """
@@ -142,9 +146,39 @@ class Basset(nn.Module):
               which you will want to use on your fully connected layers
             * Don't include the output activation here!
         """
+        #Layer 1
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = self.maxpool1(x)
+        #Layer 2
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+        x = self.maxpool2(x)
+        #Layer 3
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = F.relu(x)
+        x = self.maxpool3(x)
+        x = torch.flatten(x, start_dim=1)
+        #FC1
+        
+        x = self.fc1(x)
+        x = self.bn4(x)
+        x = F.relu(x)
+        x = self.drplayer(x)
 
+        #FC2
+        x = self.fc2(x)
+        x = self.bn5(x)
+        x = F.relu(x)
+        x = self.drplayer(x)
+
+        #Final Layer
+        x = self.fc3(x)
         # WRITE CODE HERE
-        return 0
+        return x
 
 
 def compute_fpr_tpr(y_true, y_pred):
@@ -157,10 +191,18 @@ def compute_fpr_tpr(y_true, y_pred):
     :Return: dict with keys 'tpr', 'fpr'.
              values are floats
     """
+    # Reference : https://stackoverflow.com/questions/61321778/how-to-calculate-tpr-and-fpr-in-python-without-using-sklearn/61323665#61323665
+
     output = {'fpr': 0., 'tpr': 0.}
 
     # WRITE CODE HERE
+    fp = np.sum((y_pred == 1) & (y_true == 0))
+    tp = np.sum((y_pred == 1) & (y_true == 1))
 
+    fn = np.sum((y_pred == 0) & (y_true == 1))
+    tn = np.sum((y_pred == 0) & (y_true == 0))
+    output['fpr'] = fp / (fp + tn)
+    output['tpr'] = tp / (tp + fn)
     return output
 
 
@@ -180,7 +222,19 @@ def compute_fpr_tpr_dumb_model():
             Do the same for output['tpr_list']
 
     """
-    output = {'fpr_list': [], 'tpr_list': []}
+    # Reference : https://stackoverflow.com/questions/61321778/how-to-calculate-tpr-and-fpr-in-python-without-using-sklearn/61323665#61323665
+
+    y_hat = np.random.rand(1000)
+    y = np.random.randint(0,2, 1000)
+    fpr_list = []
+    tpr_list = []
+    for k in np.arange(0, 1, 0.05):
+        y_pred =  np.where(y_hat >= k, 1, 0)
+        ratios = compute_fpr_tpr(y, y_pred)
+        fpr_list.append(ratios['fpr'])
+        tpr_list.append(ratios['tpr'])
+
+    output = {'fpr_list': fpr_list, 'tpr_list': tpr_list}
 
     # WRITE CODE HERE
 
@@ -202,7 +256,24 @@ def compute_fpr_tpr_smart_model():
 
             Do the same for output['tpr_list']
     """
-    output = {'fpr_list': [], 'tpr_list': []}
+    # Reference : https://stackoverflow.com/questions/61321778/how-to-calculate-tpr-and-fpr-in-python-without-using-sklearn/61323665#61323665
+
+    y = np.random.randint(0,2, 1000)
+    y_hat = np.zeros(1000)
+    for i in range(1000):
+        if y[i] == 1:
+            y_hat[i] = np.random.uniform(0.4,1,1)
+        else:
+            y_hat[i] = np.random.uniform(0,0.6,1)
+    fpr_list = []
+    tpr_list = []
+
+    for k in np.arange(0, 1, 0.05):
+        y_pred =  np.where(y_hat >= k, 1, 0)
+        ratios = compute_fpr_tpr(y, y_pred)
+        fpr_list.append(ratios['fpr'])
+        tpr_list.append(ratios['tpr'])
+    output = {'fpr_list': fpr_list, 'tpr_list': tpr_list}
 
     # WRITE CODE HERE
 
@@ -220,7 +291,19 @@ def compute_auc_both_models():
     output = {'auc_dumb_model': 0., 'auc_smart_model': 0.}
 
     # WRITE CODE HERE
-
+    #Dumb model
+    y_hat = np.random.rand(1000)
+    y = np.random.randint(0,2, 1000)
+    output['auc_dumb_model'] = (compute_auc(y, y_hat))['auc']
+    #Smart Model
+    y = np.random.randint(0,2, 1000)
+    y_hat = np.zeros(1000)
+    for i in range(1000):
+        if y[i] == 1:
+            y_hat[i] = np.random.uniform(0.4,1,1)
+        else:
+            y_hat[i] = np.random.uniform(0,0.6,1)
+    output['auc_smart_model'] = (compute_auc(y, y_hat))['auc']
     return output
 
 
@@ -244,7 +327,27 @@ def compute_auc_untrained_model(model, dataloader, device):
     * You should collect all the targets and model outputs and then compute AUC at the end
       (compute time should not be as much of a consideration here)
     """
-    output = {'auc': 0.}
+    y_pred = []
+    y_true = []
+    model.to(device)
+    model.eval()
+    for x in dataloader:
+        seq = x['sequence']
+        target = x['target']
+        y_true.append(torch.flatten(target).numpy())
+    
+        x = seq.to(device)
+        y_hat = torch.sigmoid(model(x))
+        y_hat = torch.flatten(y_hat)
+        y_hat = y_hat.cpu().detach().numpy()
+        y_pred.append(y_hat)
+    y_pred = np.array(np.concatenate( y_pred, axis=0 ))
+    y_true = np.array(np.concatenate( y_true, axis=0), dtype = np.int32)
+    y_pred = np.ravel(y_pred)
+    y_true = np.ravel(y_true)
+    # print(y_true, y_true.shape)
+    # print(y_pred, y_pred.shape)
+    output = compute_auc(y_true,y_pred)
 
     # WRITE CODE HERE
 
@@ -265,8 +368,17 @@ def compute_auc(y_true, y_model):
     you need to transform it before passing it here!
     """
     output = {'auc': 0.}
+    fpr_list = []
+    tpr_list = []
 
+    for k in np.arange(0, 1, 0.05):
+        y_pred =  np.where(y_model >= k, 1, 0)
+        ratios = compute_fpr_tpr(y_true, y_pred)
+        fpr_list.append(ratios['fpr'])
+        tpr_list.append(ratios['tpr'])
+        
     # WRITE CODE HERE
+    output['auc'] = -1 * np.trapz(tpr_list,fpr_list)
 
     return output
 
@@ -279,7 +391,7 @@ def get_critereon():
 
     # WRITE CODE HERE
 
-    return critereon
+    return nn.BCEWithLogitsLoss()
 
 
 def train_loop(model, train_dataloader, device, optimizer, criterion):
@@ -304,11 +416,41 @@ def train_loop(model, train_dataloader, device, optimizer, criterion):
     If you do this, your training loop will be really slow!
     You should instead compute it every 50 or so iterations and aggregate ...
     """
-
     output = {'total_score': 0.,
               'total_loss': 0.}
 
-    # WRITE CODE HERE
+    total_loss = 0.0
+    y_pred = []
+    y_true = []
+
+    model.to(device)
+    model.train() #Train mode
+
+    for seq_target in train_dataloader:
+        optimizer.zero_grad() #zero every time the loop begins
+        x  = seq_target['sequence']
+        target = seq_target['target']
+        target = target.to(device)
+        x = x.to(device)
+        y_hat = model(x)
+        loss = criterion(y_hat, target)
+        loss.backward() #backprop loss
+        optimizer.step()
+        total_loss += loss.item()
+        # Calculate AUC score
+        y_true.append(torch.flatten(target).cpu().detach().numpy())
+        y_hat = torch.flatten(torch.sigmoid(y_hat))
+        y_hat = y_hat.cpu().detach().numpy()
+        y_pred.append(y_hat)
+
+    #Flatten arrays
+    y_true = np.array(np.concatenate(y_true, axis=0), dtype= np.int32)
+    y_pred = np.array(np.concatenate(y_pred, axis=0))
+    y_pred = np.ravel(y_pred)
+    y_true = np.ravel(y_true)
+
+    output['total_loss'] = total_loss
+    output['total_score'] = compute_auc(y_true, y_pred)['auc']
 
     return output['total_score'], output['total_loss']
 
@@ -338,6 +480,37 @@ def valid_loop(model, valid_dataloader, device, optimizer, criterion):
     output = {'total_score': 0.,
               'total_loss': 0.}
 
+    total_loss = 0.0
+    y_pred = []
+    y_true = []
+
+    model.to(device)
+    model.eval() #Train mode
+    with torch.no_grad():
+        for seq_target in valid_dataloader:
+            x  = seq_target['sequence']
+            target = seq_target['target']
+            target = target.to(device)
+            x = x.to(device)
+            y_hat = model(x)
+            loss = criterion(y_hat, target)
+            total_loss += loss.item()
+            # Calculate AUC score
+            y_true.append(torch.flatten(target).cpu().detach().numpy())
+            y_hat = torch.flatten(torch.sigmoid(y_hat))
+            y_hat = y_hat.cpu().detach().numpy()
+            y_pred.append(y_hat)
+
+    #Flatten arrays
+    y_true = np.array(np.concatenate(y_true, axis=0), dtype= np.int32)
+    y_pred = np.array(np.concatenate(y_pred, axis=0))
+    y_pred = np.ravel(y_pred)
+    y_true = np.ravel(y_true)
+
+    output['total_loss'] = total_loss
+    output['total_score'] = compute_auc(y_true, y_pred)['auc']
+
     # WRITE CODE HERE
+
 
     return output['total_score'], output['total_loss']
