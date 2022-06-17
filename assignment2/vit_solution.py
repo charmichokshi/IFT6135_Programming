@@ -1,3 +1,4 @@
+from unittest.mock import patch
 import numpy as np
 import torch
 import torch.nn as nn
@@ -36,10 +37,12 @@ class LayerNorm(nn.Module):
             The output tensor, having the same shape as `inputs`.
         """
 
-        # ==========================
-        # TODO: Write your code here
-        # ==========================
-        pass
+        shapes = inputs.size()
+        var_x = torch.var(inputs, unbiased=False, dim=len(shapes)-1, keepdim=True)
+        exp_x = torch.mean(inputs, dim=len(shapes)-1, keepdim=True)
+
+        layer_norm = ((inputs - exp_x) / (torch.sqrt(var_x + self.eps))) * self.weight + self.bias
+        return layer_norm
 
     def reset_parameters(self):
         nn.init.ones_(self.weight)
@@ -52,10 +55,10 @@ class MultiHeadedAttention(nn.Module):
         self.head_size = head_size
         self.num_heads = num_heads
         self.sequence_length = sequence_length
+        self.embed_dim = head_size * num_heads
 
-        # ==========================
-        # TODO: Write your code here
-        # ==========================
+        self.qkv_proj = nn.Linear(self.embed_dim, 3 * self.embed_dim)
+        self.y_proj = nn.Linear(self.embed_dim, self.embed_dim)
 
     def get_attention_weights(self, queries, keys):
         """Compute the attention weights.
@@ -86,11 +89,11 @@ class MultiHeadedAttention(nn.Module):
             Tensor containing the attention weights for all the heads and all
             the sequences in the batch.
         """
+        # 4D matrix multiplication
+        mul = torch.einsum('blah, bleh -> blea', keys, queries)
+        weights = torch.softmax(mul / math.sqrt(self.head_size), dim = -1) 
 
-        # ==========================
-        # TODO: Write your code here
-        # ==========================
-        pass
+        return weights
 
     def apply_attention(self, queries, keys, values):
         """Apply the attention.
@@ -130,10 +133,14 @@ class MultiHeadedAttention(nn.Module):
             the sequences in the batch, and all positions in each sequence. 
         """
 
-        # ==========================
-        # TODO: Write your code here
-        # ==========================
-        pass
+        weights = self.get_attention_weights(queries=queries, keys=keys)
+        # [7, 17, 23, 23]
+        attended_values = torch.matmul(weights, values)
+        # print(attended_values.shape, weights.shape, values.shape)
+        # torch.Size([7, 17, 23, 13]) torch.Size([7, 17, 23, 23]) torch.Size([7, 17, 23, 13])
+        outputs = self.merge_heads(attended_values)
+
+        return outputs
 
     def split_heads(self, tensor):
         """Split the head vectors.
@@ -158,11 +165,10 @@ class MultiHeadedAttention(nn.Module):
             vectors. Here `dim` is the same dimension as the one in the
             definition of the input `tensor` above.
         """
-
-        # ==========================
-        # TODO: Write your code here
-        # ==========================
-        pass
+        reshaped_tensor = torch.reshape(tensor, (tensor.shape[0], tensor.shape[1], self.num_heads, -1))
+        split_tensor = torch.transpose(reshaped_tensor, 1, 2)
+        
+        return split_tensor
 
     def merge_heads(self, tensor):
         """Merge the head vectors.
@@ -186,11 +192,10 @@ class MultiHeadedAttention(nn.Module):
             vectors. Here `dim` is the same dimension as the one in the
             definition of the input `tensor` above.
         """
-
-        # ==========================
-        # TODO: Write your code here
-        # ==========================
-        pass
+        reshaped_tensor = torch.transpose(tensor, 1, 2)
+        split_tensor = torch.reshape(reshaped_tensor, (reshaped_tensor.shape[0], reshaped_tensor.shape[1], -1))
+        
+        return split_tensor
 
     def forward(self, hidden_states):
         """Multi-headed attention.
@@ -223,11 +228,21 @@ class MultiHeadedAttention(nn.Module):
             Tensor containing the output of multi-headed attention for all the
             sequences in the batch, and all positions in each sequence.
         """
+        batch_size, seq_length, embed_dim = hidden_states.size()
+        # mat mul of hidden_states (161, 221) and linear layer (221, 3*221) : out 161, 662
+        qkv = self.qkv_proj(hidden_states)
+        # qkv - [7, 23, 663]
+        qkv = self.split_heads(qkv)
+        # qkv - [7, 17, 23, 39]
+        q, k, v = qkv.chunk(3, dim=-1)
+        # torch.Size([7, 17, 23, 13]) torch.Size([7, 17, 23, 13]) torch.Size([7, 17, 23, 13])
 
-        # ==========================
-        # TODO: Write your code here
-        # ==========================
-        pass
+        Y = self.apply_attention(q, k, v)
+        # [7, 23, 221]
+        outputs = self.y_proj(Y)
+        # [7, 23, 221]
+
+        return outputs
 
 class PostNormAttentionBlock(nn.Module):
     
@@ -241,7 +256,6 @@ class PostNormAttentionBlock(nn.Module):
             dropout - Amount of dropout to apply in the feed-forward network
         """
         super().__init__()
-        
         
         self.layer_norm_1 = LayerNorm(embed_dim)
         self.attn = MultiHeadedAttention(embed_dim//num_heads, num_heads,sequence_length)
@@ -297,10 +311,13 @@ class PreNormAttentionBlock(nn.Module):
         
         
     def forward(self, x):
-        # ==========================
-        # TODO: Write your code here
-        # ==========================
-        pass
+        
+        attention_outputs = self.attn(self.layer_norm_1(x))
+        attention_outputs = x + attention_outputs
+        outputs = self.linear(self.layer_norm_2(attention_outputs))
+        outputs = outputs + attention_outputs
+
+        return outputs
 
 
 
@@ -340,12 +357,12 @@ class VisionTransformer(nn.Module):
             nn.Linear(embed_dim, num_classes)
         )
         self.dropout = nn.Dropout(dropout)
-        
+        norm_layer=nn.LayerNorm
         # Parameters/Embeddings
         self.cls_token = nn.Parameter(torch.randn(1,1,embed_dim))
         self.pos_embedding = nn.Parameter(torch.randn(1,self.sequence_length,embed_dim))
     
-    def get_patches(self,image, patch_size, flatten_channels=True):
+    def get_patches(self, image, patch_size, flatten_channels=True):
         """
         Inputs:
             image - torch.Tensor representing the image of shape [B, C, H, W]
@@ -354,11 +371,20 @@ class VisionTransformer(nn.Module):
                               as a feature vector instead of a image grid.
         Output : torch.Tensor representing the sequence of shape [B,patches,patch_size*patch_size] for flattened.
         """
-        # ==========================
-        # TODO: Write your code here
-        # ==========================
-        pass
+        
+        # unfold = nn.Unfold(kernel_size=(patch_size, patch_size), stride=patch_size)
+        # output = unfold(image)
+        # output = torch.transpose(output, 1, 2)
 
+        # return output
+
+        B, C, H, W = image.shape
+        x = image.reshape(B, C, H//patch_size, patch_size, W//patch_size, patch_size)
+        x = x.permute(0, 2, 4, 1, 3, 5) # [B, H', W', C, p_H, p_W]
+        x = x.flatten(1,2)              # [B, H'*W', C, p_H, p_W]
+        if flatten_channels:
+            x = x.flatten(2,4)          # [B, H'*W', C*p_H*p_W]
+        return x
 
     def forward(self, x):
         """ViT
@@ -367,7 +393,7 @@ class VisionTransformer(nn.Module):
 
         Parameters
         ----------
-        x - (`torch.LongTensor` of shape `(batch_size, channels,height , width)`)
+        x - (`torch.LongTensor` of shape `(batch_size, channels, height , width)`)
             The input tensor containing the iamges.
 
         Returns
@@ -379,30 +405,23 @@ class VisionTransformer(nn.Module):
         x = self.get_patches(x, self.patch_size)
         B, T, _ = x.shape
         x = self.input_layer(x)
-        
+
         # Add CLS token and positional encoding
         cls_token = self.cls_token.repeat(B, 1, 1)
         x = torch.cat([cls_token, x], dim=1)
-        x = x + self.pos_embedding[:,:T+1]
-        
-        #Add dropout and then the transformer
-        
-        # ==========================
-        # TODO: Write your code here
-        # ==========================
-        
+        x = x + self.pos_embedding[:, :T+1]
 
-        #Take the cls token representation and send it to mlp_head
+        # Add dropout and then the transformer
+        x = self.dropout(x)
+        x = self.transformer(x)
 
-        # ==========================
-        # TODO: Write your code here
-        # ==========================
+        # Take the cls token representation and send it to mlp_head
+        # cls token is at the 0th index in output of transformer
+        cls = x[:, 0]
+        out = self.mlp_head(cls)
+        return out
         
-        
-    
-        
-        pass
-    def loss(self,preds,labels):
+    def loss(self, preds, labels):
         '''Loss function.
 
         This function computes the loss 
@@ -411,7 +430,5 @@ class VisionTransformer(nn.Module):
             labels- True labels of the dataset
 
         '''
-        # ==========================
-        # TODO: Write your code here
-        # ==========================
-        pass
+        loss = nn.CrossEntropyLoss()
+        return loss(preds, labels)

@@ -72,10 +72,13 @@ class LSTM(nn.Module):
             - c (`torch.FloatTensor` of shape `(num_layers, batch_size, hidden_size)`)
         """
 
-        # ==========================
-        # TODO: Write your code here
-        # ==========================
-        pass
+        embeds = self.embedding(inputs)
+        lstm_out, last_hidden_state = self.lstm(embeds, hidden_states)
+        mlp_out = self.classifier(lstm_out)
+        log_probs = F.log_softmax(mlp_out, dim=2)
+
+        return log_probs, last_hidden_state
+
 
     def loss(self, log_probas, targets, mask):
         """Loss function.
@@ -102,11 +105,26 @@ class LSTM(nn.Module):
         loss (`torch.FloatTensor` scalar)
             The scalar loss, corresponding to the (mean) negative log-likelihood.
         """
+        shapes = log_probas.size()
+        loss_fn = nn.NLLLoss(reduction='none')
 
-        # ==========================
-        # TODO: Write your code here
-        # ==========================
-        pass
+        # reshape
+        # log_probas: (batch_size*sequence_length, vocabulary_size)  (N, C)
+        # targets: (batch_size*sequence_length) (N)
+        log_probas_reshaped = log_probas.view(-1, shapes[2])
+        
+        # output size: (batch_size * sequence_length) (N)
+        all_loss = loss_fn(log_probas_reshaped, targets.view(-1))
+        # reshape output size: (batch_size, sequence_length)  (N, C)
+        all_loss_reshaped = all_loss.view(shapes[0], shapes[1])
+
+        # row-wise avg (divide by non-zero mask count)  (N, C)
+        losses_masked = torch.sum(all_loss_reshaped * mask, dim=1) / torch.sum(mask, dim=1)
+
+        # col-wise avg (devide by batch size)
+        loss = losses_masked.sum() / shapes[0]
+        
+        return loss
 
     def initial_states(self, batch_size, device=None):
         if device is None:
